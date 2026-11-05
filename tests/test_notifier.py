@@ -184,6 +184,26 @@ def test_first_run_is_silent_then_new_claims_are_emailed(env, espn, mail):
     assert len(mail.sent) == 1  # no duplicates
 
 
+def test_claims_sorted_by_bid_within_a_waiver_run(env, espn, mail):
+    run = int(datetime(2026, 11, 4, 17, 0, 10).timestamp()) * MS
+    cfg, state = make(env)
+    notifier.poll_once(cfg, state)
+    espn.activities += [
+        waiver(run + 1, 1, 10, bid=0),      # ESPN processes low bids first...
+        waiver(run + 2, 2, 11, bid=3),
+        waiver(run + 3, 1, 12, bid=21),
+        waiver(run + 4, 2, 13, bid=3),      # same bid as Zack Moss: keep ESPN's order
+        waiver(run + 3_600_000, 1, 11, bid=50),  # an hour later: listed after this run
+    ]
+    notifier.poll_once(cfg, state)
+    body = mail.sent[0].get_body(("plain",)).get_content()
+    order = [name for line in body.splitlines() for name in
+             ["Tyler Higbee", "Zack Moss", "Jaylen Waddle", "Puka Nacua"] if f"Added (waivers) {name}" in line]
+    bids = [line.rsplit("$", 1)[1] for line in body.splitlines() if "FAAB" in line]
+    assert bids == ["21 FAAB)", "3 FAAB)", "3 FAAB)", "0 FAAB)", "50 FAAB)"]
+    assert order[:4] == ["Tyler Higbee", "Zack Moss", "Jaylen Waddle", "Puka Nacua"]
+
+
 def test_state_survives_restart(env, espn, mail):
     espn.activities = [waiver(1, 1, 10)]
     cfg, state = make(env)

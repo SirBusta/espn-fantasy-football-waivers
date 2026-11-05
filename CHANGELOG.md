@@ -15,6 +15,7 @@
   being renewed, it stays on last season instead of sending false
   "can't reach your league" alerts.
 - `--dry-run` and the logs show the season, week and next waiver run.
+- Each waiver run's claims are listed highest FAAB bid first.
 
 ## 1.0.0
 

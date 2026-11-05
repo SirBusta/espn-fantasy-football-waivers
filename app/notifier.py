@@ -436,8 +436,17 @@ def fetch_events(cfg: Config, size: int = 100) -> tuple[str, list[Event], League
                 moves=moves,
             )
         )
-    events.sort(key=lambda e: e.when)
-    return league.settings.name, events, status
+    return league.settings.name, sort_for_email(events), status
+
+
+def sort_for_email(events: list[Event]) -> list[Event]:
+    """Oldest first, but within one waiver run (the same minute) the biggest
+    FAAB bids first. Ties and moves without a bid keep ESPN's order."""
+    def top_bid(e: Event) -> int:
+        return max((m.bid for m in e.moves if m.bid is not None), default=-1)
+
+    by_time = sorted(events, key=lambda e: e.when)
+    return sorted(by_time, key=lambda e: (e.when.replace(second=0, microsecond=0), -top_bid(e)))
 
 
 # --------------------------------------------------------------------------- #
