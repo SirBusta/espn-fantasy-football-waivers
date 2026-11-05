@@ -21,8 +21,9 @@ Wed Nov 4, 9:00 AM PST
 
 - Works with public and private leagues, with or without FAAB.
 - Can also include free-agent pickups, drops and trades.
-- Reads your league's waiver schedule from ESPN and checks 15 minutes after each
-  waiver run, so there's nothing to look up. (Fixed times or every 15 minutes also work.)
+- Reads your league's waiver schedule from ESPN and checks 5 minutes after each
+  waiver run, then once a minute until ESPN has processed it, so there's nothing
+  to look up. (Fixed times or every 15 minutes also work.)
 - Sends a short "No waiver claims today" email when nothing went through, so you
   know it's working. These stop by themselves when the season ends and start
   again after next season's draft.
@@ -68,9 +69,9 @@ Open the container's **Logs** to see what it's doing. A healthy start looks like
 
 ```
 ESPN Fantasy Football Waivers 1.1.0 starting.
-Watching league 123456 (latest season) for WAIVER, 15 min after each of the league's waiver runs.
+Watching league 123456 (latest season) for WAIVER, 5 min after each of the league's waiver runs.
 Connected to 'My League' (2026 season, week 9 of 17, next waiver run Fri Nov 6, 9:00 AM PST). First run: recorded 25 existing transactions without emailing; only new ones will be sent.
-Next check: Fri Nov 6, 9:15 AM PST (after the Fri Nov 6, 9:00 AM PST waiver run)
+Next check: Fri Nov 6, 9:05 AM PST (after the Fri Nov 6, 9:00 AM PST waiver run)
 ```
 
 ### Between seasons
@@ -120,7 +121,7 @@ docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:l
 | `EMAIL_FROM` | `SMTP_USER` | Sender address |
 | `NOTIFY_TYPES` | `WAIVER` | Add any of `FA`, `TRADE`, `DROP`, e.g. `WAIVER,FA,TRADE` |
 | `CHECK_TIMES` | `auto` | `auto`: after each of the league's waiver runs. Or fixed 24-hour `HH:MM` times in `TZ`, e.g. `09:15,13:00`. Or `interval`: every `POLL_MINUTES` |
-| `AUTO_DELAY_MINUTES` | 15 | With `auto`, how long after each waiver run to check |
+| `AUTO_DELAY_MINUTES` | 5 | With `auto`, how long after each scheduled waiver run to check. If ESPN hasn't processed it yet, it checks every minute until it has |
 | `CHECK_DAYS` | every day | Days for fixed `CHECK_TIMES`, e.g. `Wed,Thu,Fri,Sat,Sun` |
 | `POLL_MINUTES` | 15 | How often to check with `interval` |
 | `NOTIFY_WHEN_EMPTY` | true | Email "No waiver claims today" after a waiver run with nothing new (not with `interval`); paused between seasons |

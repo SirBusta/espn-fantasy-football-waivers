@@ -55,17 +55,17 @@ class FakeESPN:
         self.week, self.final_week, self.drafted = 9, 17, True
         self.last_waiver_ms = None
         self.next_waiver_ms = None
+        self.status_requests = 0
+        self.on_status = None  # called before each status answer
 
-    def league(self, league_id, year, **_):
-        if self.fail:
-            raise Exception("401 access denied")
-        self.years.append(year)
-        if year in self.missing_years:
-            raise notifier.ESPNInvalidLeague(f"League {league_id} does not exist")
+    def requests(self, **_):
         espn = self
 
         class Request:
             def league_get(self, params=None, headers=None, extend=""):
+                espn.status_requests += 1
+                if espn.on_status:
+                    espn.on_status()
                 return {
                     "scoringPeriodId": espn.week,
                     "draftDetail": {"drafted": espn.drafted},
@@ -76,9 +76,19 @@ class FakeESPN:
                     },
                 }
 
+        return Request()
+
+    def league(self, league_id, year, **_):
+        if self.fail:
+            raise Exception("401 access denied")
+        self.years.append(year)
+        if year in self.missing_years:
+            raise notifier.ESPNInvalidLeague(f"League {league_id} does not exist")
+        espn = self
+
         class League:
             settings = types.SimpleNamespace(name="Test League", faab=True)
-            espn_request = Request()
+            espn_request = espn.requests()
 
             def __init__(self):
                 self.year = year
@@ -140,6 +150,7 @@ def env(monkeypatch, tmp_path):
 def espn(monkeypatch):
     fake = FakeESPN()
     monkeypatch.setattr(notifier, "League", fake.league)
+    monkeypatch.setattr(notifier, "EspnFantasyRequests", fake.requests)
     return fake
 
 
@@ -320,6 +331,49 @@ def test_auto_waits_for_espn_to_process_the_run(env, espn, mail):
     assert mail.subjects == ["[Test League] No waiver claims today"]  # once per run
 
 
+def test_wait_for_run_checks_every_minute_until_processed(env, espn, monkeypatch):
+    cfg = notifier.Config.from_env()
+    run = datetime.now(cfg.timezone) - notifier.timedelta(minutes=5)
+    run_ms = int(run.timestamp()) * MS
+    espn.last_waiver_ms = run_ms - 86_400 * MS  # yesterday's run
+    espn.next_waiver_ms = run_ms
+
+    def espn_finishes_on_third_look():
+        if espn.status_requests == 3:
+            espn.last_waiver_ms = run_ms + 90 * MS  # started 90 seconds late
+            espn.next_waiver_ms = run_ms + 86_400 * MS
+
+    espn.on_status = espn_finishes_on_third_look
+    sleeps = []
+    monkeypatch.setattr(notifier.time, "sleep", sleeps.append)
+    notifier.wait_for_run(cfg, 2026, run)
+    assert espn.status_requests == 3 and sleeps == [60, 60]
+
+
+def test_wait_for_run_stops_if_espn_skips_the_run(env, espn, monkeypatch):
+    cfg = notifier.Config.from_env()
+    run = datetime.now(cfg.timezone) - notifier.timedelta(minutes=5)
+    espn.last_waiver_ms = int(run.timestamp() - 86_400) * MS
+    espn.next_waiver_ms = int(run.timestamp() + 86_400) * MS  # moved on to tomorrow
+    monkeypatch.setattr(notifier.time, "sleep", lambda s: pytest.fail("should not wait"))
+    notifier.wait_for_run(cfg, 2026, run)
+    assert espn.status_requests == 1
+
+
+def test_wait_for_run_slows_down_then_gives_up(env, espn, monkeypatch):
+    cfg = notifier.Config.from_env()
+    espn.last_waiver_ms = 0
+    sleeps = []
+    monkeypatch.setattr(notifier.time, "sleep", sleeps.append)
+    late = datetime.now(cfg.timezone) - notifier.timedelta(minutes=45)
+    espn.on_status = lambda: espn.status_requests == 2 and setattr(espn, "last_waiver_ms", 10**13)
+    notifier.wait_for_run(cfg, 2026, late)
+    assert sleeps == [900]  # past 30 minutes: every 15 minutes
+    espn.on_status, sleeps[:] = None, []
+    notifier.wait_for_run(cfg, 2026, datetime.now(cfg.timezone) - notifier.timedelta(hours=7))
+    assert sleeps == []  # past 6 hours: give up
+
+
 def test_plan_auto_check(env):
     cfg = notifier.Config.from_env()
     now = at(2026, 11, 6, 8, 0)
@@ -328,10 +382,11 @@ def test_plan_auto_check(env):
         return notifier.LeagueStatus(2026, phase, 9, 17, None, next_waiver)
 
     assert cfg.check_mode == "auto"
-    assert notifier.plan_auto_check(cfg, status(), now) == (at(2026, 11, 6, 9, 15), at(2026, 11, 6, 9, 0))
-    # run due but not processed yet: look again in 15 minutes
+    # 5 minutes after the scheduled run
+    assert notifier.plan_auto_check(cfg, status(), now) == (at(2026, 11, 6, 9, 5), at(2026, 11, 6, 9, 0))
+    # run due but not processed yet (e.g. after a restart): start waiting for it now
     later = at(2026, 11, 6, 9, 20)
-    assert notifier.plan_auto_check(cfg, status(), later) == (at(2026, 11, 6, 9, 35), at(2026, 11, 6, 9, 0))
+    assert notifier.plan_auto_check(cfg, status(), later) == (later, at(2026, 11, 6, 9, 0))
     # off-season or before the draft: once a day at noon, no "nothing new" emails
     assert notifier.plan_auto_check(cfg, status("over"), now) == (at(2026, 11, 6, 12, 0), None)
     assert notifier.plan_auto_check(cfg, status("predraft"), at(2026, 11, 6, 13, 0)) == (at(2026, 11, 7, 12, 0), None)

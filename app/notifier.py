@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from espn_api.football import League
-from espn_api.requests.espn_requests import ESPNInvalidLeague
+from espn_api.requests.espn_requests import ESPNInvalidLeague, EspnFantasyRequests
 
 log = logging.getLogger("espn-fantasy-football-waivers")
 APP_NAME = "ESPN Fantasy Football Waivers"
@@ -111,7 +111,7 @@ class Config:
     # "auto": check AUTO_DELAY_MINUTES after each of the league's waiver runs;
     # "fixed": at CHECK_TIMES on CHECK_DAYS; "interval": every POLL_MINUTES.
     check_mode: str = "auto"
-    auto_delay_minutes: float = 15
+    auto_delay_minutes: float = 5
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -168,7 +168,7 @@ class Config:
 
         return cls(
             check_mode=check_mode,
-            auto_delay_minutes=float(_env("AUTO_DELAY_MINUTES", "15")),
+            auto_delay_minutes=float(_env("AUTO_DELAY_MINUTES", "5")),
             # "Nothing today" emails only make sense when checks follow the
             # waiver runs, so they're off for every-N-minutes polling.
             notify_when_empty=scheduled and _env_bool("NOTIFY_WHEN_EMPTY", True),
@@ -371,7 +371,20 @@ def _from_ms(ms, tz: ZoneInfo) -> datetime | None:
 
 
 def fetch_status(league, cfg: Config) -> LeagueStatus:
-    data = league.espn_request.league_get(params={"view": ["mSettings", "mDraftDetail"]})
+    return _parse_status(league.espn_request, league.year, cfg)
+
+
+def fetch_status_only(cfg: Config, season: int) -> LeagueStatus:
+    """Just the league's status: one small request instead of the full league
+    download, for checking every minute whether a waiver run has finished."""
+    cookies = {"espn_s2": cfg.espn_s2, "SWID": cfg.swid} if cfg.espn_s2 and cfg.swid else None
+    request = EspnFantasyRequests(sport="nfl", year=season, league_id=cfg.league_id,
+                                  cookies=cookies, logger=None)
+    return _parse_status(request, season, cfg)
+
+
+def _parse_status(request, season: int, cfg: Config) -> LeagueStatus:
+    data = request.league_get(params={"view": ["mSettings", "mDraftDetail"]})
     status = data.get("status", {})
     week = data.get("scoringPeriodId") or 0
     final_week = status.get("finalScoringPeriod") or 0
@@ -382,7 +395,7 @@ def fetch_status(league, cfg: Config) -> LeagueStatus:
     else:
         phase = "active"
     return LeagueStatus(
-        season=league.year,
+        season=season,
         phase=phase,
         week=week,
         final_week=final_week,
@@ -551,10 +564,44 @@ def plan_auto_check(cfg: Config, status: LeagueStatus | None,
     when = run + timedelta(minutes=cfg.auto_delay_minutes)
     if when > now:
         return when, run
-    if now - run < timedelta(hours=6):
+    if now - run < WAIT_FOR_RUN_LIMIT:
         # The run is due, but ESPN hasn't processed it or updated its schedule yet.
-        return now + timedelta(minutes=15), run
+        return now, run
     return now + timedelta(hours=1), None
+
+
+WAIT_FOR_RUN_LIMIT = timedelta(hours=6)
+
+
+def wait_for_run(cfg: Config, season: int, run: datetime) -> None:
+    """Return once ESPN reports the waiver run as processed.
+
+    ESPN usually starts within a couple of minutes of the scheduled time, so
+    check once a minute (a small status request, not the full league), then
+    every 15 minutes after half an hour, and give up after 6 hours.
+    """
+    said_waiting = False
+    while True:
+        try:
+            status = fetch_status_only(cfg, season)
+            if status.last_waiver and status.last_waiver >= run - timedelta(minutes=1):
+                if said_waiting:
+                    log.info("ESPN processed the waiver run at %s.", _fmt_time(status.last_waiver))
+                return
+            if status.next_waiver and status.next_waiver > run:
+                log.info("ESPN skipped the %s waiver run.", _fmt_time(run))
+                return
+        except Exception as exc:
+            log.warning("Couldn't check whether waivers have run: %s", exc)
+        waited = datetime.now(run.tzinfo) - run
+        if waited >= WAIT_FOR_RUN_LIMIT:
+            log.warning("Gave up waiting for ESPN to process the %s waiver run.", _fmt_time(run))
+            return
+        if not said_waiting:
+            log.info("ESPN hasn't processed the %s waiver run yet; checking every minute.",
+                     _fmt_time(run))
+            said_waiting = True
+        time.sleep(60 if waited < timedelta(minutes=30) else 15 * 60)
 
 
 def sleep_until(when: datetime) -> None:
@@ -660,8 +707,8 @@ def poll_once(cfg: Config, state: State, waiver_check: bool = False,
             if status.phase != "active":
                 log.info("Not sending a 'nothing new' email: %s.", status.describe())
             elif not run_done:
-                log.info("ESPN hasn't processed the %s waiver run yet; checking again soon.",
-                         _fmt_time(expected_run))
+                log.info("Not sending a 'nothing new' email: ESPN didn't process the %s "
+                         "waiver run.", _fmt_time(expected_run))
             elif run_key and run_key == state.last_reported_run:
                 pass  # already reported on this waiver run
             else:
@@ -820,6 +867,8 @@ def main() -> None:
         after = f" (after the {_fmt_time(run)} waiver run)" if run else ""
         log.info("Next check: %s%s", _fmt_time(when), after)
         sleep_until(when)
+        if run is not None and state.status is not None:
+            wait_for_run(cfg, state.status.season, run)
         poll_with_retries(cfg, state, waiver_check=run is not None, expected_run=run)
 
 

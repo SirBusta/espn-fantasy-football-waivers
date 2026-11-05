@@ -3,8 +3,10 @@
 ## 1.1.0
 
 - New default `CHECK_TIMES=auto`: reads the league's waiver schedule from ESPN
-  and checks 15 minutes after each waiver run (`AUTO_DELAY_MINUTES`). If ESPN
-  hasn't finished processing yet, it checks again every 15 minutes until it has.
+  and checks 5 minutes after each waiver run (`AUTO_DELAY_MINUTES`). If ESPN
+  hasn't processed the run yet, it checks once a minute (a small status request)
+  until it has, slowing to every 15 minutes after half an hour and giving up
+  after 6 hours, e.g. when ESPN skips a run.
   Fixed times still work; `interval` replaces a blank `CHECK_TIMES` for
   every-N-minutes checking.
 - Season awareness: one "Season's over" email after the final week, then no
