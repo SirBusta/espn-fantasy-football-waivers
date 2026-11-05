@@ -1,15 +1,15 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>ESPN-Waiver-Results</Name>
-  <Repository>ghcr.io/sirbusta/espn-waiver-results:latest</Repository>
-  <Registry>https://github.com/SirBusta/espn-waiver-results/pkgs/container/espn-waiver-results</Registry>
+  <Name>ESPN-Fantasy-Football-Waivers</Name>
+  <Repository>ghcr.io/sirbusta/espn-fantasy-football-waivers:latest</Repository>
+  <Registry>https://github.com/SirBusta/espn-fantasy-football-waivers/pkgs/container/espn-fantasy-football-waivers</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/SirBusta/espn-waiver-results/issues</Support>
-  <Project>https://github.com/SirBusta/espn-waiver-results</Project>
-  <ReadMe>https://github.com/SirBusta/espn-waiver-results#readme</ReadMe>
+  <Support>https://github.com/SirBusta/espn-fantasy-football-waivers/issues</Support>
+  <Project>https://github.com/SirBusta/espn-fantasy-football-waivers</Project>
+  <ReadMe>https://github.com/SirBusta/espn-fantasy-football-waivers#readme</ReadMe>
   <Overview>Emails you your ESPN fantasy football league's waiver results: who claimed whom, what they dropped, and the FAAB bid. ESPN doesn't send these itself.
 
 Set your league ID and email (SMTP) settings below. Private leagues also need two cookies from espn.com, espn_s2 and SWID; each field below says where to find them, and the README has the full steps. To check at a fixed time after your league's waivers run (for example 09:15 on Wed,Thu,Fri,Sat,Sun), fill in Check times and Check days. You'll also get a short "No waiver claims today" email when nothing went through. Otherwise it checks every 15 minutes. You can also include free-agent pickups, drops and trades.
@@ -19,9 +19,9 @@ The first time it starts, it records your league's existing activity without ema
 Unofficial tool; not affiliated with or endorsed by ESPN.</Overview>
   <Category>Tools:Utilities</Category>
   <WebUI/>
-  <TemplateURL>https://raw.githubusercontent.com/SirBusta/espn-waiver-results/main/templates/espn-waiver-results.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/SirBusta/espn-waiver-results/main/assets/icon.png</Icon>
-  <ExtraSearchTerms>espn fantasy football waivers waiver wire faab email notification transactions league</ExtraSearchTerms>
+  <TemplateURL>https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/templates/espn-fantasy-football-waivers.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/assets/icon.png</Icon>
+  <ExtraSearchTerms>espn fantasy football waivers waiver results waiver wire faab email notification transactions league</ExtraSearchTerms>
   <License>MIT</License>
   <Changes>### 1.0.0&#xD;
 - First release.</Changes>
@@ -31,7 +31,7 @@ Unofficial tool; not affiliated with or endorsed by ESPN.</Overview>
   <DonateText/>
   <DonateLink/>
   <Requires/>
-  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/espn-waiver-results" Mode="rw" Description="Remembers which moves you've already been emailed about." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/espn-waiver-results</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/espn-fantasy-football-waivers" Mode="rw" Description="Remembers which moves you've already been emailed about." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/espn-fantasy-football-waivers</Config>
   <Config Name="League ID" Target="LEAGUE_ID" Default="" Mode="" Description="Open your league on fantasy.espn.com: it's the number after leagueId= in the address bar, e.g. 123456." Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="ESPN espn_s2 cookie" Target="ESPN_S2" Default="" Mode="" Description="Private leagues only (most are). Log in at espn.com in Chrome or Edge, press F12, open Application &gt; Cookies &gt; https://fantasy.espn.com, type espn_s2 in the Filter box and click the row. Copy the whole value from the panel below the list (the table cuts it off), with 'Show URL-decoded' unticked. Don't click Log out on espn.com in that browser afterward, or the cookie stops working." Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="ESPN SWID cookie" Target="SWID" Default="" Mode="" Description="Private leagues only. Same place as espn_s2: filter for SWID and copy its value, including the curly braces, e.g. {1A2B3C4D-...}." Type="Variable" Display="always" Required="false" Mask="true"/>

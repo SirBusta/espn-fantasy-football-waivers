@@ -44,7 +44,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE: ghcr.io/sirbusta/espn-waiver-results
+      IMAGE: ghcr.io/sirbusta/espn-fantasy-football-waivers
     steps:
       - uses: actions/checkout@v6
 
@@ -91,7 +91,7 @@ jobs:
           outputs: type=image,push=true,oci-mediatypes=false
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
-            org.opencontainers.image.title=espn-waiver-results
+            org.opencontainers.image.title=espn-fantasy-football-waivers
             org.opencontainers.image.description=Emails your ESPN fantasy football league's waiver results
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=MIT

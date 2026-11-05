@@ -197,7 +197,7 @@ def test_one_alert_after_repeated_failures(env, espn, mail):
     espn.fail = True
     for _ in range(4):
         assert not notifier.poll_once(cfg, state)
-    assert mail.subjects == ["[ESPN Waiver Results] Can't reach your league"]
+    assert mail.subjects == ["[ESPN Fantasy Football Waivers] Can't reach your league"]
     espn.fail = False
     assert notifier.poll_once(cfg, state)
     assert state.consecutive_failures == 0 and not state.alert_sent

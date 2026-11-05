@@ -1,4 +1,4 @@
-"""ESPN Waiver Results: emails your ESPN fantasy football league's waiver results.
+"""ESPN Fantasy Football Waivers: emails your ESPN fantasy football league's waiver results.
 
 Reads an ESPN league's recent activity (waiver claims, and optionally
 free-agent adds, drops and trades) and emails a summary of anything new.
@@ -32,8 +32,8 @@ from zoneinfo import ZoneInfo
 import requests
 from espn_api.football import League
 
-log = logging.getLogger("espn-waiver-results")
-APP_NAME = "ESPN Waiver Results"
+log = logging.getLogger("espn-fantasy-football-waivers")
+APP_NAME = "ESPN Fantasy Football Waivers"
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 # espn_api calls requests.get() with no timeout, so a stalled ESPN connection

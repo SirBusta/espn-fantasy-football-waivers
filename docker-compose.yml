@@ -1,9 +1,9 @@
 services:
-  espn-waiver-results:
-    image: ghcr.io/sirbusta/espn-waiver-results:latest
+  espn-fantasy-football-waivers:
+    image: ghcr.io/sirbusta/espn-fantasy-football-waivers:latest
     # Or build from this folder instead of pulling:
     # build: .
-    container_name: espn-waiver-results
+    container_name: espn-fantasy-football-waivers
     restart: always
     env_file: .env
     volumes:

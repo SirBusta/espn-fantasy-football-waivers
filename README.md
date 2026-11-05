@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/icon.png" width="96" alt=""></p>
 
-# ESPN Waiver Results
+# ESPN Fantasy Football Waivers
 
 ESPN Fantasy Football doesn't email you when waivers run. This does. After each
 waiver run, you get one email listing every claim in your league: who picked up
@@ -55,7 +55,7 @@ the SMTP password. Your normal Gmail password won't work.
 
 ## Install on Unraid
 
-1. On the **Apps** tab, search for **ESPN Waiver Results** and click **Install**.
+1. On the **Apps** tab, search for **ESPN Fantasy Football Waivers** and click **Install**.
 2. Fill in your league ID, cookies and email settings.
 3. To check once a day right after your league's waivers run, set **Check times**
    (e.g. `09:15`, in your server's time zone) and **Check days**
@@ -66,7 +66,7 @@ the SMTP password. Your normal Gmail password won't work.
 Open the container's **Logs** to see what it's doing. A healthy start looks like:
 
 ```
-ESPN Waiver Results 1.0.0 starting.
+ESPN Fantasy Football Waivers 1.0.0 starting.
 Watching league 123456 (2026 season) for WAIVER on Wed,Thu,Fri,Sat,Sun at 09:15 America/Los_Angeles.
 Connected to 'My League'. First run: recorded 25 existing transactions without emailing; only new ones will be sent.
 Next check: Thu Nov 5, 9:15 AM PST
@@ -84,20 +84,20 @@ docker compose up -d
 or plain Docker:
 
 ```bash
-docker run -d --name espn-waiver-results --restart always --env-file .env -v "$(pwd)/data:/data" ghcr.io/sirbusta/espn-waiver-results:latest
+docker run -d --name espn-fantasy-football-waivers --restart always --env-file .env -v "$(pwd)/data:/data" ghcr.io/sirbusta/espn-fantasy-football-waivers:latest
 ```
 
 Two commands help with setup. This one prints your league's recent activity
 without sending anything, to confirm your league ID and cookies work:
 
 ```bash
-docker run --rm --env-file .env ghcr.io/sirbusta/espn-waiver-results:latest python notifier.py --dry-run
+docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --dry-run
 ```
 
 This one sends a test email:
 
 ```bash
-docker run --rm --env-file .env ghcr.io/sirbusta/espn-waiver-results:latest python notifier.py --test-email
+docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --test-email
 ```
 
 ## Settings
