@@ -43,18 +43,45 @@ def waiver(date, team, player, bid=0, dropped=None):
     return activity(date, msgs)
 
 
+MS = 1000
+
+
 class FakeESPN:
     def __init__(self):
         self.activities = []
         self.fail = False
+        self.missing_years = set()  # seasons ESPN hasn't created yet
+        self.years = []  # seasons requested
+        self.week, self.final_week, self.drafted = 9, 17, True
+        self.last_waiver_ms = None
+        self.next_waiver_ms = None
 
-    def league(self, **_):
+    def league(self, league_id, year, **_):
         if self.fail:
             raise Exception("401 access denied")
+        self.years.append(year)
+        if year in self.missing_years:
+            raise notifier.ESPNInvalidLeague(f"League {league_id} does not exist")
         espn = self
+
+        class Request:
+            def league_get(self, params=None, headers=None, extend=""):
+                return {
+                    "scoringPeriodId": espn.week,
+                    "draftDetail": {"drafted": espn.drafted},
+                    "status": {
+                        "finalScoringPeriod": espn.final_week,
+                        "waiverLastExecutionDate": espn.last_waiver_ms,
+                        "waiverNextExecutionDate": espn.next_waiver_ms,
+                    },
+                }
 
         class League:
             settings = types.SimpleNamespace(name="Test League", faab=True)
+            espn_request = Request()
+
+            def __init__(self):
+                self.year = year
 
             def recent_activity(self, size):
                 return list(espn.activities)
@@ -207,7 +234,8 @@ def test_one_alert_after_repeated_failures(env, espn, mail):
     ({"CHECK_TIMES": "09:15"}, ["No waiver claims today", "No waiver claims today",
                                 "Waivers processed: 1 claim"]),
     ({"CHECK_TIMES": "09:15", "NOTIFY_WHEN_EMPTY": "false"}, ["Waivers processed: 1 claim"]),
-    ({}, ["Waivers processed: 1 claim"]),  # every-N-minutes mode never sends "nothing" emails
+    # every-N-minutes mode never sends "nothing" emails
+    ({"CHECK_TIMES": "interval"}, ["Waivers processed: 1 claim"]),
 ])
 def test_nothing_new_email(env, espn, mail, extra, expected):
     for key, value in extra.items():
@@ -215,12 +243,102 @@ def test_nothing_new_email(env, espn, mail, extra, expected):
     espn.activities = [waiver(1, 1, 10)]
     cfg, state = make(env)
     notifier.poll_once(cfg, state)  # first run: silent
-    notifier.poll_once(cfg, state)  # nothing new
+    notifier.poll_once(cfg, state, waiver_check=True)  # nothing new
     espn.activities.append(activity(2, [{"messageTypeId": 178, "to": 1, "targetId": 11}]))
-    notifier.poll_once(cfg, state)  # free-agent add only: still no waiver claims
+    notifier.poll_once(cfg, state, waiver_check=True)  # free-agent add only: no claims
     espn.activities.append(waiver(3, 1, 12))
-    notifier.poll_once(cfg, state)
+    notifier.poll_once(cfg, state, waiver_check=True)
     assert [s.split("] ", 1)[1] for s in mail.subjects] == expected
+
+
+def test_check_modes(env):
+    assert notifier.Config.from_env().check_mode == "auto"  # the default
+    env.setenv("CHECK_TIMES", "interval")
+    cfg = notifier.Config.from_env()
+    assert cfg.check_mode == "interval" and not cfg.notify_when_empty
+    env.setenv("CHECK_TIMES", "09:15,13:00")
+    cfg = notifier.Config.from_env()
+    assert cfg.check_mode == "fixed" and cfg.check_times == [(9, 15), (13, 0)]
+
+
+def test_falls_back_to_last_season_until_renewed(env, espn, mail):
+    this_year = datetime.now().year
+    espn.missing_years = {this_year}
+    cfg, state = make(env)
+    _, _, status = notifier.fetch_events(cfg)
+    assert espn.years == [this_year, this_year - 1] and status.season == this_year - 1
+
+
+def test_wrong_league_id_is_not_mistaken_for_offseason(env, espn):
+    espn.fail = True  # ESPN answers "access denied" for a league that isn't yours
+    cfg, _ = make(env)
+    with pytest.raises(Exception):
+        notifier.fetch_events(cfg)
+
+
+@pytest.mark.parametrize("week, final, drafted, phase", [
+    (9, 17, True, "active"),
+    (17, 17, True, "active"),   # final week: waivers still run
+    (18, 17, True, "over"),
+    (1, 17, False, "predraft"),
+])
+def test_season_phase(env, espn, week, final, drafted, phase):
+    espn.week, espn.final_week, espn.drafted = week, final, drafted
+    cfg, _ = make(env)
+    assert notifier.fetch_events(cfg)[2].phase == phase
+
+
+def test_season_over_email_once_then_quiet(env, espn, mail):
+    env.setenv("CHECK_TIMES", "09:15")
+    cfg, state = make(env)
+    notifier.poll_once(cfg, state)  # first run, mid-season
+    espn.week = 18  # the final week has ended
+    notifier.poll_once(cfg, state, waiver_check=True)
+    notifier.poll_once(cfg, state, waiver_check=True)
+    assert mail.subjects == ["[Test League] Season's over"]
+    espn.week, espn.drafted = 1, False  # next season, before the draft
+    notifier.poll_once(cfg, state, waiver_check=True)
+    espn.drafted = True  # drafted: the daily emails are back
+    notifier.poll_once(cfg, state, waiver_check=True)
+    assert mail.subjects[1:] == ["[Test League] No waiver claims today"]
+
+
+def at(*args):
+    return datetime(*args, tzinfo=notifier.ZoneInfo("America/Los_Angeles"))
+
+
+def test_auto_waits_for_espn_to_process_the_run(env, espn, mail):
+    run = at(2026, 11, 6, 9, 0)
+    espn.last_waiver_ms = int(at(2026, 11, 5, 9, 0, 10).timestamp()) * MS  # yesterday's run
+    cfg, state = make(env)
+    notifier.poll_once(cfg, state)  # first run
+    notifier.poll_once(cfg, state, waiver_check=True, expected_run=run)
+    assert mail.sent == []  # today's run hasn't been processed: don't say "nothing"
+    espn.last_waiver_ms = int(run.timestamp() + 10) * MS
+    notifier.poll_once(cfg, state, waiver_check=True, expected_run=run)
+    notifier.poll_once(cfg, state, waiver_check=True, expected_run=run)  # ESPN schedule stale
+    assert mail.subjects == ["[Test League] No waiver claims today"]  # once per run
+
+
+def test_plan_auto_check(env):
+    cfg = notifier.Config.from_env()
+    now = at(2026, 11, 6, 8, 0)
+
+    def status(phase="active", next_waiver=at(2026, 11, 6, 9, 0)):
+        return notifier.LeagueStatus(2026, phase, 9, 17, None, next_waiver)
+
+    assert cfg.check_mode == "auto"
+    assert notifier.plan_auto_check(cfg, status(), now) == (at(2026, 11, 6, 9, 15), at(2026, 11, 6, 9, 0))
+    # run due but not processed yet: look again in 15 minutes
+    later = at(2026, 11, 6, 9, 20)
+    assert notifier.plan_auto_check(cfg, status(), later) == (at(2026, 11, 6, 9, 35), at(2026, 11, 6, 9, 0))
+    # off-season or before the draft: once a day at noon, no "nothing new" emails
+    assert notifier.plan_auto_check(cfg, status("over"), now) == (at(2026, 11, 6, 12, 0), None)
+    assert notifier.plan_auto_check(cfg, status("predraft"), at(2026, 11, 6, 13, 0)) == (at(2026, 11, 7, 12, 0), None)
+    # last check failed: try again in an hour
+    assert notifier.plan_auto_check(cfg, None, now) == (at(2026, 11, 6, 9, 0), None)
+    # league without waivers: every POLL_MINUTES
+    assert notifier.plan_auto_check(cfg, status(next_waiver=None), now) == (at(2026, 11, 6, 8, 15), None)
 
 
 @pytest.mark.parametrize("now, expected", [

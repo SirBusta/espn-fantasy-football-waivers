@@ -21,8 +21,11 @@ Wed Nov 4, 9:00 AM PST
 
 - Works with public and private leagues, with or without FAAB.
 - Can also include free-agent pickups, drops and trades.
-- Check at a fixed time right after your league's waivers run, with a short
-  "No waiver claims today" email when nothing went through, or check every 15 minutes.
+- Reads your league's waiver schedule from ESPN and checks 15 minutes after each
+  waiver run, so there's nothing to look up. (Fixed times or every 15 minutes also work.)
+- Sends a short "No waiver claims today" email when nothing went through, so you
+  know it's working. These stop by themselves when the season ends and start
+  again after next season's draft.
 - Never emails the same move twice, retries when ESPN is slow, and emails you once
   if it can't reach your league (for example, when your cookies expire).
 - Runs as a small Docker container. There's an Unraid Community Applications template.
@@ -56,21 +59,26 @@ the SMTP password. Your normal Gmail password won't work.
 ## Install on Unraid
 
 1. On the **Apps** tab, search for **ESPN Fantasy Football Waivers** and click **Install**.
-2. Fill in your league ID, cookies and email settings.
-3. To check once a day right after your league's waivers run, set **Check times**
-   (e.g. `09:15`, in your server's time zone) and **Check days**
-   (e.g. `Wed,Thu,Fri,Sat,Sun`). Leave them blank to check every 15 minutes.
-4. To confirm email works, set **Send test email on start** to `true`, click **Apply**
+2. Fill in your league ID, cookies and email settings. Leave **Check times** on
+   `auto`; it follows your league's waiver schedule.
+3. To confirm email works, set **Send test email on start** to `true`, click **Apply**
    and check your inbox. Then set it back to `false`.
 
 Open the container's **Logs** to see what it's doing. A healthy start looks like:
 
 ```
-ESPN Fantasy Football Waivers 1.0.0 starting.
-Watching league 123456 (2026 season) for WAIVER on Wed,Thu,Fri,Sat,Sun at 09:15 America/Los_Angeles.
-Connected to 'My League'. First run: recorded 25 existing transactions without emailing; only new ones will be sent.
-Next check: Thu Nov 5, 9:15 AM PST
+ESPN Fantasy Football Waivers 1.1.0 starting.
+Watching league 123456 (latest season) for WAIVER, 15 min after each of the league's waiver runs.
+Connected to 'My League' (2026 season, week 9 of 17, next waiver run Fri Nov 6, 9:00 AM PST). First run: recorded 25 existing transactions without emailing; only new ones will be sent.
+Next check: Fri Nov 6, 9:15 AM PST (after the Fri Nov 6, 9:00 AM PST waiver run)
 ```
+
+### Between seasons
+
+When your league's final week is over, you get one "Season's over" email, and the
+"No waiver claims today" emails stop. The app keeps checking once a day, quietly.
+When the league manager renews the league for the new season and you draft,
+the emails start again on their own.
 
 ## Install with Docker
 
@@ -111,16 +119,17 @@ docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:l
 | `SMTP_USER` / `SMTP_PASSWORD` | | Login for the sending account |
 | `EMAIL_FROM` | `SMTP_USER` | Sender address |
 | `NOTIFY_TYPES` | `WAIVER` | Add any of `FA`, `TRADE`, `DROP`, e.g. `WAIVER,FA,TRADE` |
-| `CHECK_TIMES` | blank | Fixed check times, 24-hour `HH:MM` in `TZ`, e.g. `09:15` or `09:15,13:00` |
-| `CHECK_DAYS` | every day | Days for `CHECK_TIMES`, e.g. `Wed,Thu,Fri,Sat,Sun` |
-| `POLL_MINUTES` | 15 | How often to check when `CHECK_TIMES` is blank |
-| `NOTIFY_WHEN_EMPTY` | true | With `CHECK_TIMES`, email "No waiver claims today" when nothing is new |
+| `CHECK_TIMES` | `auto` | `auto`: after each of the league's waiver runs. Or fixed 24-hour `HH:MM` times in `TZ`, e.g. `09:15,13:00`. Or `interval`: every `POLL_MINUTES` |
+| `AUTO_DELAY_MINUTES` | 15 | With `auto`, how long after each waiver run to check |
+| `CHECK_DAYS` | every day | Days for fixed `CHECK_TIMES`, e.g. `Wed,Thu,Fri,Sat,Sun` |
+| `POLL_MINUTES` | 15 | How often to check with `interval` |
+| `NOTIFY_WHEN_EMPTY` | true | Email "No waiver claims today" after a waiver run with nothing new (not with `interval`); paused between seasons |
 | `TZ` | `America/New_York` | Time zone for check times and emails (Unraid sets this for you) |
 | `SEND_TEST_EMAIL` | false | Send a test email each time the container starts |
 | `SEND_ON_FIRST_RUN` | false | Email the existing recent activity the first time it starts |
-| `SEASON` | current | Year the season started |
-| `RETRIES` / `RETRY_MINUTES` | 3 / 15 | If a fixed-time check fails, try again this many times, this far apart |
-| `ALERT_AFTER_FAILURES` | `RETRIES`+1, or 8 | Failed checks in a row before the one-time alert email |
+| `SEASON` | latest | Year the season started. Blank follows the league's latest season |
+| `RETRIES` / `RETRY_MINUTES` | 3 / 15 | If a scheduled check fails, try again this many times, this far apart |
+| `ALERT_AFTER_FAILURES` | `RETRIES`+1, or 8 with `interval` | Failed checks in a row before the one-time alert email |
 | `PUID` / `PGID` | 99 / 100 | Owner of the data folder (Unraid's nobody:users) |
 
 ## How it works

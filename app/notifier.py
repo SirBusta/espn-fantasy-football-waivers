@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from espn_api.football import League
+from espn_api.requests.espn_requests import ESPNInvalidLeague
 
 log = logging.getLogger("espn-fantasy-football-waivers")
 APP_NAME = "ESPN Fantasy Football Waivers"
@@ -83,16 +84,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-def _default_season() -> int:
-    # ESPN names a season by the year it starts; Jan/Feb belong to last season.
-    now = datetime.now()
-    return now.year if now.month >= 3 else now.year - 1
-
-
 @dataclass
 class Config:
     league_id: int
-    season: int
+    season: int | None  # None: follow the league's latest season
     espn_s2: str | None
     swid: str | None
     poll_minutes: float
@@ -113,6 +108,10 @@ class Config:
     retries: int = 3
     retry_minutes: float = 15
     notify_when_empty: bool = False
+    # "auto": check AUTO_DELAY_MINUTES after each of the league's waiver runs;
+    # "fixed": at CHECK_TIMES on CHECK_DAYS; "interval": every POLL_MINUTES.
+    check_mode: str = "auto"
+    auto_delay_minutes: float = 15
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -147,29 +146,38 @@ class Config:
                 sys.exit(f"Unknown day {d!r} in CHECK_DAYS; use Mon,Tue,Wed,...")
             check_days.add(day_names.index(d))
         check_times = []
-        for t in (_env("CHECK_TIMES") or "").split(","):
-            t = t.strip()
-            if not t:
-                continue
-            try:
-                hour, minute = (int(x) for x in t.split(":"))
-                assert 0 <= hour < 24 and 0 <= minute < 60
-            except (ValueError, AssertionError):
-                sys.exit(f"Bad time {t!r} in CHECK_TIMES; use 24-hour HH:MM like 09:15")
-            check_times.append((hour, minute))
+        raw_times = (_env("CHECK_TIMES") or "auto").strip().lower()
+        if raw_times in {"auto", "interval"}:
+            check_mode = raw_times
+        else:
+            check_mode = "fixed"
+            for t in raw_times.split(","):
+                t = t.strip()
+                if not t:
+                    continue
+                try:
+                    hour, minute = (int(x) for x in t.split(":"))
+                    assert 0 <= hour < 24 and 0 <= minute < 60
+                except (ValueError, AssertionError):
+                    sys.exit(f"Bad time {t!r} in CHECK_TIMES; use auto, interval, "
+                             "or 24-hour HH:MM like 09:15")
+                check_times.append((hour, minute))
         if check_times and not check_days:
             check_days = set(range(7))
+        scheduled = check_mode != "interval"
 
         return cls(
-            # "Nothing today" emails only make sense with fixed check times,
-            # so they're on by default there and off for every-N-minutes polling.
-            notify_when_empty=bool(check_times) and _env_bool("NOTIFY_WHEN_EMPTY", True),
+            check_mode=check_mode,
+            auto_delay_minutes=float(_env("AUTO_DELAY_MINUTES", "15")),
+            # "Nothing today" emails only make sense when checks follow the
+            # waiver runs, so they're off for every-N-minutes polling.
+            notify_when_empty=scheduled and _env_bool("NOTIFY_WHEN_EMPTY", True),
             check_days=check_days,
             check_times=sorted(check_times),
             retries=int(_env("RETRIES", "3")),
             retry_minutes=float(_env("RETRY_MINUTES", "15")),
             league_id=int(league_id),
-            season=int(_env("SEASON") or _default_season()),
+            season=int(_env("SEASON")) if _env("SEASON") else None,
             espn_s2=_env("ESPN_S2"),
             swid=swid,
             poll_minutes=float(_env("POLL_MINUTES", "15")),
@@ -184,10 +192,10 @@ class Config:
             smtp_password=_env("SMTP_PASSWORD"),
             email_from=_env("EMAIL_FROM") or _env("SMTP_USER"),
             email_to=[a.strip() for a in (_env("EMAIL_TO") or "").split(",") if a.strip()],
-            # On a schedule, alert once a morning's retries are used up.
+            # On a schedule, alert once a check's retries are used up.
             alert_after_failures=int(
                 _env("ALERT_AFTER_FAILURES")
-                or (int(_env("RETRIES", "3")) + 1 if check_times else 8)
+                or (int(_env("RETRIES", "3")) + 1 if scheduled else 8)
             ),
         )
 
@@ -217,12 +225,17 @@ class State:
         self.initialized = False
         self.consecutive_failures = 0
         self.alert_sent = False
+        self.phase: str | None = None  # season phase at the last check
+        self.last_reported_run: str | None = None  # waiver run already reported on
+        self.status: LeagueStatus | None = None  # from the last check (not saved)
         if path.exists():
             data = json.loads(path.read_text())
             self.seen = data.get("seen", [])
             self.initialized = data.get("initialized", False)
             self.consecutive_failures = data.get("consecutive_failures", 0)
             self.alert_sent = data.get("alert_sent", False)
+            self.phase = data.get("phase")
+            self.last_reported_run = data.get("last_reported_run")
         self._seen_set = set(self.seen)
 
     def __contains__(self, key: str) -> bool:
@@ -246,6 +259,8 @@ class State:
                     "initialized": self.initialized,
                     "consecutive_failures": self.consecutive_failures,
                     "alert_sent": self.alert_sent,
+                    "phase": self.phase,
+                    "last_reported_run": self.last_reported_run,
                 },
                 indent=1,
             )
@@ -272,6 +287,24 @@ class Event:
     when: datetime
     category: str
     moves: list[Move]
+
+
+@dataclass
+class LeagueStatus:
+    season: int
+    phase: str  # "predraft", "active" or "over"
+    week: int
+    final_week: int
+    last_waiver: datetime | None  # when ESPN last processed waivers
+    next_waiver: datetime | None  # when ESPN will next process waivers
+
+    def describe(self) -> str:
+        if self.phase == "predraft":
+            return f"{self.season} season: waiting for the draft"
+        if self.phase == "over":
+            return f"{self.season} season is over"
+        nxt = f", next waiver run {_fmt_time(self.next_waiver)}" if self.next_waiver else ""
+        return f"{self.season} season, week {self.week} of {self.final_week}{nxt}"
 
 
 def _team_name(team) -> str:
@@ -313,13 +346,54 @@ def _event_key(date_ms: int, raw_actions) -> str:
     return hashlib.sha1("\n".join(sorted(parts)).encode()).hexdigest()
 
 
-def fetch_events(cfg: Config, size: int = 100) -> tuple[str, list[Event]]:
-    league = League(
-        league_id=cfg.league_id,
-        year=cfg.season,
-        espn_s2=cfg.espn_s2,
-        swid=cfg.swid,
+def open_league(cfg: Config):
+    """Open the configured season, or else the league's latest one.
+
+    ESPN only creates a league's new season when the league manager renews it
+    (often months after the calendar year changes), so if this year's season
+    doesn't exist yet, fall back to last year's.
+    """
+    def connect(year):
+        return League(league_id=cfg.league_id, year=year,
+                      espn_s2=cfg.espn_s2, swid=cfg.swid)
+
+    if cfg.season:
+        return connect(cfg.season)
+    year = datetime.now(cfg.timezone).year
+    try:
+        return connect(year)
+    except ESPNInvalidLeague:
+        return connect(year - 1)
+
+
+def _from_ms(ms, tz: ZoneInfo) -> datetime | None:
+    return datetime.fromtimestamp(ms / 1000, tz=tz) if ms else None
+
+
+def fetch_status(league, cfg: Config) -> LeagueStatus:
+    data = league.espn_request.league_get(params={"view": ["mSettings", "mDraftDetail"]})
+    status = data.get("status", {})
+    week = data.get("scoringPeriodId") or 0
+    final_week = status.get("finalScoringPeriod") or 0
+    if not data.get("draftDetail", {}).get("drafted"):
+        phase = "predraft"
+    elif final_week and week > final_week:
+        phase = "over"
+    else:
+        phase = "active"
+    return LeagueStatus(
+        season=league.year,
+        phase=phase,
+        week=week,
+        final_week=final_week,
+        last_waiver=_from_ms(status.get("waiverLastExecutionDate"), cfg.timezone),
+        next_waiver=_from_ms(status.get("waiverNextExecutionDate"), cfg.timezone),
     )
+
+
+def fetch_events(cfg: Config, size: int = 100) -> tuple[str, list[Event], LeagueStatus]:
+    league = open_league(cfg)
+    status = fetch_status(league, cfg)
     uses_faab = bool(getattr(league.settings, "faab", False))
     events: list[Event] = []
     for activity in league.recent_activity(size=size):
@@ -350,7 +424,7 @@ def fetch_events(cfg: Config, size: int = 100) -> tuple[str, list[Event]]:
             )
         )
     events.sort(key=lambda e: e.when)
-    return league.settings.name, events
+    return league.settings.name, events, status
 
 
 # --------------------------------------------------------------------------- #
@@ -449,7 +523,7 @@ def send_email(cfg: Config, subject: str, text: str, html_body: str | None = Non
 # Main loop
 # --------------------------------------------------------------------------- #
 def next_run(cfg: Config, now: datetime) -> datetime:
-    """Next scheduled check strictly after `now` (wall-clock time in cfg.timezone)."""
+    """Next fixed-time check strictly after `now` (wall-clock time in cfg.timezone)."""
     for offset in range(8):
         day = (now + timedelta(days=offset)).date()
         if day.weekday() not in cfg.check_days:
@@ -462,16 +536,62 @@ def next_run(cfg: Config, now: datetime) -> datetime:
     raise RuntimeError("No scheduled check found; check CHECK_DAYS/CHECK_TIMES")
 
 
+def plan_auto_check(cfg: Config, status: LeagueStatus | None,
+                    now: datetime) -> tuple[datetime, datetime | None]:
+    """In auto mode: when to check next, and which waiver run that check covers."""
+    if status is None:  # the last check failed
+        return now + timedelta(hours=1), None
+    if status.phase != "active":
+        # Off-season or before the draft: look once a day for the new season.
+        noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        return (noon if noon > now else noon + timedelta(days=1)), None
+    run = status.next_waiver
+    if run is None:  # a league without waivers
+        return now + timedelta(minutes=cfg.poll_minutes), None
+    when = run + timedelta(minutes=cfg.auto_delay_minutes)
+    if when > now:
+        return when, run
+    if now - run < timedelta(hours=6):
+        # The run is due, but ESPN hasn't processed it or updated its schedule yet.
+        return now + timedelta(minutes=15), run
+    return now + timedelta(hours=1), None
+
+
 def sleep_until(when: datetime) -> None:
     while (remaining := (when - datetime.now(when.tzinfo)).total_seconds()) > 0:
         time.sleep(min(remaining, 3600))
 
 
-def poll_once(cfg: Config, state: State) -> bool:
-    """Check ESPN and email anything new. Returns False if it should be retried."""
+def _note_phase(cfg: Config, state: State, league_name: str, status: LeagueStatus) -> None:
+    previous, state.phase = state.phase, status.phase
+    if previous is None or previous == status.phase:
+        return
+    log.info("League status changed: %s.", status.describe())
+    if previous == "active" and status.phase == "over" and cfg.notify_when_empty:
+        try:
+            send_email(
+                cfg,
+                f"[{league_name}] Season's over",
+                f"The {status.season} season of {league_name} has ended, so the daily "
+                "'No waiver claims today' emails stop here. They'll start again on their "
+                "own after next season's draft.\n\n"
+                "Any new transactions will still be emailed.",
+            )
+        except Exception as exc:
+            log.error("Could not send the season's-over email: %s", exc)
+
+
+def poll_once(cfg: Config, state: State, waiver_check: bool = False,
+              expected_run: datetime | None = None) -> bool:
+    """Check ESPN and email anything new. Returns False if it should be retried.
+
+    waiver_check: this check follows a waiver run, so also report when nothing
+    is new. expected_run: in auto mode, the waiver run this check is for.
+    """
     try:
-        league_name, events = fetch_events(cfg)
+        league_name, events, status = fetch_events(cfg)
     except Exception as exc:  # network errors, expired cookies, ESPN outages
+        state.status = None
         state.consecutive_failures += 1
         log.error("Could not fetch ESPN activity (%d in a row): %s",
                   state.consecutive_failures, exc)
@@ -499,16 +619,25 @@ def poll_once(cfg: Config, state: State) -> bool:
         log.info("ESPN reachable again after %d failure(s).", state.consecutive_failures)
     state.consecutive_failures = 0
     state.alert_sent = False
+    state.status = status
+    _note_phase(cfg, state, league_name, status)
 
     new = [e for e in events if e.key not in state]
     if not state.initialized and not cfg.send_on_first_run:
-        log.info("Connected to '%s'. First run: recorded %d existing transactions "
-                 "without emailing; only new ones will be sent.", league_name, len(new))
+        log.info("Connected to '%s' (%s). First run: recorded %d existing transactions "
+                 "without emailing; only new ones will be sent.",
+                 league_name, status.describe(), len(new))
         state.add([e.key for e in new])
         state.initialized = True
         state.save()
         return True
     state.initialized = True
+
+    run_key = expected_run.isoformat() if expected_run else None
+    run_done = expected_run is None or (
+        status.last_waiver is not None
+        and status.last_waiver >= expected_run - timedelta(minutes=1)
+    )
 
     to_send = [e for e in new if e.category in cfg.categories]
     if to_send:
@@ -523,32 +652,44 @@ def poll_once(cfg: Config, state: State) -> bool:
             log.error("Could not send email: %s", exc)
             state.save()
             return False
+        if waiver_check and run_done and run_key:
+            state.last_reported_run = run_key
     else:
         log.info("Nothing new to report (%d recent transactions checked).", len(events))
-        if cfg.notify_when_empty:
-            what = ("waiver claims" if cfg.categories == {"WAIVER"}
-                    else "transactions")
-            now = _fmt_time(datetime.now(cfg.timezone))
-            try:
-                send_email(
-                    cfg,
-                    f"[{league_name}] No {what} today",
-                    f"Checked {league_name} at {now}: no new {what} since the last check.\n\n"
-                    "(This email means the notifier is running normally.)",
-                )
-            except Exception as exc:
-                log.error("Could not send email: %s", exc)
-                state.save()
-                return False
+        if cfg.notify_when_empty and waiver_check:
+            if status.phase != "active":
+                log.info("Not sending a 'nothing new' email: %s.", status.describe())
+            elif not run_done:
+                log.info("ESPN hasn't processed the %s waiver run yet; checking again soon.",
+                         _fmt_time(expected_run))
+            elif run_key and run_key == state.last_reported_run:
+                pass  # already reported on this waiver run
+            else:
+                what = ("waiver claims" if cfg.categories == {"WAIVER"}
+                        else "transactions")
+                now = _fmt_time(datetime.now(cfg.timezone))
+                try:
+                    send_email(
+                        cfg,
+                        f"[{league_name}] No {what} today",
+                        f"Checked {league_name} at {now}: no new {what} since the "
+                        "last check.\n\n(This email means the notifier is running normally.)",
+                    )
+                except Exception as exc:
+                    log.error("Could not send email: %s", exc)
+                    state.save()
+                    return False
+                if run_key:
+                    state.last_reported_run = run_key
     state.add([e.key for e in new])
     state.save()
     return True
 
 
-def poll_with_retries(cfg: Config, state: State) -> None:
+def poll_with_retries(cfg: Config, state: State, **kwargs) -> None:
     for attempt in range(cfg.retries + 1):
         try:
-            if poll_once(cfg, state):
+            if poll_once(cfg, state, **kwargs):
                 return
         except Exception:
             log.exception("Unexpected error during check")
@@ -585,11 +726,13 @@ def drop_privileges(data_dir: Path) -> None:
     os.setuid(uid)
 
 
-def startup_check(cfg: Config) -> None:
+def startup_check(cfg: Config, state: State) -> None:
     """Log whether ESPN is reachable so setup problems show up in the logs right away."""
     try:
-        league_name, events = fetch_events(cfg)
-        log.info("Connected to '%s' (%d recent transactions).", league_name, len(events))
+        league_name, events, status = fetch_events(cfg)
+        state.status = status
+        log.info("Connected to '%s' (%s; %d recent transactions).",
+                 league_name, status.describe(), len(events))
     except Exception as exc:
         log.error("Could not read league %s: %s: %s. If the league is private, check "
                   "ESPN_S2 and SWID.", cfg.league_id, type(exc).__name__, exc)
@@ -597,7 +740,7 @@ def startup_check(cfg: Config) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--once", action="store_true", help="poll once and exit")
+    parser.add_argument("--once", action="store_true", help="check once and exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="print recent activity; don't email or save state")
     parser.add_argument("--test-email", action="store_true", help="send a test email and exit")
@@ -617,11 +760,15 @@ def main() -> None:
 
     if args.dry_run:
         try:
-            league_name, events = fetch_events(cfg, size=50)
+            league_name, events, status = fetch_events(cfg, size=50)
         except Exception as exc:
             sys.exit(f"Could not read league {cfg.league_id}: {type(exc).__name__}: {exc}")
+        print(f"{league_name}: {status.describe()}.")
+        if cfg.check_mode == "auto":
+            when, _ = plan_auto_check(cfg, status, datetime.now(cfg.timezone))
+            print(f"In auto mode, the next check would be {_fmt_time(when)}.")
         events = [e for e in events if e.category in cfg.categories][-15:]
-        print(f"Most recent activity matching NOTIFY_TYPES={','.join(sorted(cfg.categories))}:\n")
+        print(f"\nMost recent activity matching NOTIFY_TYPES={','.join(sorted(cfg.categories))}:\n")
         print(render_text(league_name, events) if events else "No recent activity found.")
         return
 
@@ -638,28 +785,42 @@ def main() -> None:
         except Exception as exc:
             log.error("Test email failed: %s: %s", type(exc).__name__, exc)
 
-    types = ",".join(sorted(cfg.categories))
-    if not cfg.check_times:
-        log.info("Watching league %s (%s season) for %s every %g min.",
-                 cfg.league_id, cfg.season, types, cfg.poll_minutes)
+    what = (f"league {cfg.league_id} ({cfg.season or 'latest'} season) "
+            f"for {','.join(sorted(cfg.categories))}")
+
+    if cfg.check_mode == "interval":
+        log.info("Watching %s every %g min.", what, cfg.poll_minutes)
         while True:
             poll_with_retries(cfg, state)
             time.sleep(cfg.poll_minutes * 60)
 
-    days = ",".join(d for i, d in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
-                    if i in cfg.check_days)
-    times = ",".join(f"{h:02d}:{m:02d}" for h, m in cfg.check_times)
-    log.info("Watching league %s (%s season) for %s on %s at %s %s.",
-             cfg.league_id, cfg.season, types, days, times, cfg.timezone.key)
+    if cfg.check_mode == "fixed":
+        days = ",".join(d for i, d in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+                        if i in cfg.check_days)
+        times = ",".join(f"{h:02d}:{m:02d}" for h, m in cfg.check_times)
+        log.info("Watching %s on %s at %s %s.", what, days, times, cfg.timezone.key)
+        if not state.initialized:
+            poll_with_retries(cfg, state)  # snapshot existing activity so it isn't emailed
+        else:
+            startup_check(cfg, state)
+        while True:
+            when = next_run(cfg, datetime.now(cfg.timezone))
+            log.info("Next check: %s", _fmt_time(when))
+            sleep_until(when)
+            poll_with_retries(cfg, state, waiver_check=True)
+
+    log.info("Watching %s, %g min after each of the league's waiver runs.",
+             what, cfg.auto_delay_minutes)
     if not state.initialized:
-        poll_with_retries(cfg, state)  # snapshot existing activity so it isn't emailed
-    else:
-        startup_check(cfg)
-    while True:
-        when = next_run(cfg, datetime.now(cfg.timezone))
-        log.info("Next check: %s", _fmt_time(when))
-        sleep_until(when)
         poll_with_retries(cfg, state)
+    else:
+        startup_check(cfg, state)
+    while True:
+        when, run = plan_auto_check(cfg, state.status, datetime.now(cfg.timezone))
+        after = f" (after the {_fmt_time(run)} waiver run)" if run else ""
+        log.info("Next check: %s%s", _fmt_time(when), after)
+        sleep_until(when)
+        poll_with_retries(cfg, state, waiver_check=run is not None, expected_run=run)
 
 
 if __name__ == "__main__":
