@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Notes for the next coding session (not part of the project)
+SESSION_HANDOFF.md
