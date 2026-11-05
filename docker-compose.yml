@@ -1,0 +1,10 @@
+services:
+  espn-waiver-results:
+    image: ghcr.io/sirbusta/espn-waiver-results:latest
+    # Or build from this folder instead of pulling:
+    # build: .
+    container_name: espn-waiver-results
+    restart: always
+    env_file: .env
+    volumes:
+      - ./data:/data
