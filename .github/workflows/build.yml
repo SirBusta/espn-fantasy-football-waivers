@@ -6,12 +6,10 @@ on:
       - main
     tags:
       - 'v*'
-    # Docs, the Unraid template, CA profile, icon and example settings aren't part of the image.
+    # Docs, the icon and example settings aren't part of the image.
     paths-ignore:
       - '**.md'
-      - 'templates/**'
       - 'assets/**'
-      - 'ca_profile.xml'
       - '.env.example'
   pull_request:
   workflow_dispatch:

@@ -1,7 +1,0 @@
-<?xml version="1.0"?>
-<CommunityApplications>
-  <Profile>ESPN Fantasy Football Waivers emails you your ESPN fantasy football league's waiver results: who claimed whom, what they dropped, and the FAAB bid, a few minutes after each waiver run. Maintained by SirBusta; open source (MIT). Unofficial; not affiliated with ESPN. Ask questions in the Unraid forum support thread; report bugs there or on GitHub Issues.</Profile>
-  <Icon>https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/assets/icon.png</Icon>
-  <WebPage>https://github.com/SirBusta/espn-fantasy-football-waivers</WebPage>
-  <Forum>https://forums.unraid.net/topic/201197-support-sirbusta-espn-fantasy-football-waivers-email/</Forum>
-</CommunityApplications>

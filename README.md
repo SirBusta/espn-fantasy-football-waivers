@@ -191,6 +191,9 @@ Pushes to `main` publish the `edge` image. Tagging `vX.Y.Z` (matching the
 `VERSION` file) publishes `X.Y.Z` and `latest`, and creates a GitHub release
 from `CHANGELOG.md`.
 
+The Unraid template is in the [BudMinder repository](https://github.com/SirBusta/budminder/blob/main/templates/espn-fantasy-football-waivers.xml),
+which Community Applications reads for all of SirBusta's apps. Change it there.
+
 ## Support
 
 Questions: the [Unraid forum support thread](https://forums.unraid.net/topic/201197-support-sirbusta-espn-fantasy-football-waivers-email/)
