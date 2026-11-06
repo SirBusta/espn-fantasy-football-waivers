@@ -191,6 +191,12 @@ Pushes to `main` publish the `edge` image. Tagging `vX.Y.Z` (matching the
 `VERSION` file) publishes `X.Y.Z` and `latest`, and creates a GitHub release
 from `CHANGELOG.md`.
 
+## Support
+
+Questions: the [Unraid forum support thread](https://forums.unraid.net/topic/201197-support-sirbusta-espn-fantasy-football-waivers-email/)
+(you don't need Unraid to ask there). Bugs: there or on
+[GitHub Issues](https://github.com/SirBusta/espn-fantasy-football-waivers/issues).
+
 ## License
 
 [MIT](LICENSE)

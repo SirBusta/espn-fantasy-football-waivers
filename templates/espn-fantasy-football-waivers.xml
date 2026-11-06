@@ -7,7 +7,7 @@
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/SirBusta/espn-fantasy-football-waivers/issues</Support>
+  <Support>https://forums.unraid.net/topic/201197-support-sirbusta-espn-fantasy-football-waivers-email/</Support>
   <Project>https://github.com/SirBusta/espn-fantasy-football-waivers</Project>
   <ReadMe>https://github.com/SirBusta/espn-fantasy-football-waivers#readme</ReadMe>
   <Overview>Emails you your ESPN fantasy football league's waiver results: who claimed whom, what they dropped, and the FAAB bid. ESPN doesn't send these itself.
