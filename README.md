@@ -83,31 +83,67 @@ the emails start again on their own.
 
 ## Install with Docker
 
-Copy [`.env.example`](.env.example) to `.env`, fill it in, then either use the
-included [`docker-compose.yml`](docker-compose.yml):
+Runs anywhere Docker does: a Linux server, a Raspberry Pi 4 or 5 (64-bit OS), a
+Synology, QNAP or TrueNAS NAS, or Docker Desktop on Windows or a Mac (it only
+checks while that computer is on and awake). The image is built for both
+amd64 and arm64.
+
+1. Make a folder for it and download two files into it: [`.env.example`](https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/.env.example),
+   saved as `.env`, and [`docker-compose.yml`](https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/docker-compose.yml).
+   On Linux or a Mac:
+
+   ```bash
+   mkdir espn-fantasy-football-waivers && cd espn-fantasy-football-waivers
+   curl -fsSL -o .env https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/.env.example
+   curl -fsSLO https://raw.githubusercontent.com/SirBusta/espn-fantasy-football-waivers/main/docker-compose.yml
+   ```
+
+2. Open `.env` in a text editor and fill in your league ID, cookies and email
+   settings. **Set `TZ` to your time zone** (for example `America/Los_Angeles`;
+   [list of names](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)),
+   or the emails show New York time.
+
+3. Check that your league ID and cookies work. This prints your league's recent
+   activity without sending anything:
+
+   ```bash
+   docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --dry-run
+   ```
+
+4. Send a test email to check the email settings:
+
+   ```bash
+   docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --test-email
+   ```
+
+5. Start it. It keeps running in the background and starts again after a reboot:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Without Docker Compose, this does the same:
+
+   ```bash
+   docker run -d --name espn-fantasy-football-waivers --restart always --env-file .env -v "$(pwd)/data:/data" ghcr.io/sirbusta/espn-fantasy-football-waivers:latest
+   ```
+
+The `data` folder it creates remembers which moves you've been emailed about;
+keep it when updating.
+
+**See what it's doing:** `docker logs -f espn-fantasy-football-waivers` (Ctrl+C
+to stop watching). A healthy start looks like the log in the Unraid section above.
+
+**Change a setting:** edit `.env`, then `docker compose up -d` again.
+
+**Update to a new version:**
 
 ```bash
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
-or plain Docker:
-
-```bash
-docker run -d --name espn-fantasy-football-waivers --restart always --env-file .env -v "$(pwd)/data:/data" ghcr.io/sirbusta/espn-fantasy-football-waivers:latest
-```
-
-Two commands help with setup. This one prints your league's recent activity
-without sending anything, to confirm your league ID and cookies work:
-
-```bash
-docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --dry-run
-```
-
-This one sends a test email:
-
-```bash
-docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:latest python notifier.py --test-email
-```
+(Without Compose: `docker pull` the image, then `docker rm -f espn-fantasy-football-waivers`
+and run the `docker run -d ...` command again.)
 
 ## Settings
 
@@ -119,7 +155,7 @@ docker run --rm --env-file .env ghcr.io/sirbusta/espn-fantasy-football-waivers:l
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURITY` | `smtp.gmail.com` / 587 / `starttls` | `starttls` on 587 or `ssl` on 465 |
 | `SMTP_USER` / `SMTP_PASSWORD` | | Login for the sending account |
 | `EMAIL_FROM` | `SMTP_USER` | Sender address |
-| `NOTIFY_TYPES` | `WAIVER` | Add any of `FA`, `TRADE`, `DROP`, e.g. `WAIVER,FA,TRADE` |
+| `NOTIFY_TYPES` | `WAIVER` | Any of `WAIVER` (waiver claims), `FA` (free-agent pickups), `TRADE`, `DROP` (drops without a pickup), e.g. `WAIVER,DROP` or `WAIVER,FA,TRADE,DROP`. With `auto`, moves made between waiver runs come in the next waiver run's email; use `interval` to get them within `POLL_MINUTES` |
 | `CHECK_TIMES` | `auto` | `auto`: after each of the league's waiver runs. Or fixed 24-hour `HH:MM` times in `TZ`, e.g. `09:15,13:00`. Or `interval`: every `POLL_MINUTES` |
 | `AUTO_DELAY_MINUTES` | 5 | With `auto`, how long after each scheduled waiver run to check. If ESPN hasn't processed it yet, it checks every minute until it has |
 | `CHECK_DAYS` | every day | Days for fixed `CHECK_TIMES`, e.g. `Wed,Thu,Fri,Sat,Sun` |
